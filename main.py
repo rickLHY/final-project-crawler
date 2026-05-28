@@ -130,29 +130,33 @@ def crawl_date(
     print(f"  -> Saved {saved} train schedules for {date_str}.")
 
 
-def crawl_general(tdx: TDXClient, db: DBWriter, station_map: dict[str, int], target_date: date):
-    print("[*] Fetching GeneralTimetable (date-independent) …")
-    try:
-        raw = tdx.get_general_timetable()
-        trains = parse_general_timetable(raw)
-    except Exception as exc:
-        print(f"  [ERROR] Failed to fetch general timetable: {exc}")
-        return
+def crawl_general(
+    tdx: TDXClient,
+    db: DBWriter,
+    station_map: dict[str, int],
+    target_date: date,
+    cached_trains: list[dict] | None = None,
+) -> list[dict]:
+    """Fetch (or reuse cached) GeneralTimetable and write for target_date.
+    Returns the parsed trains list so callers can cache it."""
+    if cached_trains is None:
+        print("[*] Fetching GeneralTimetable (date-independent) …")
+        try:
+            raw = tdx.get_general_timetable()
+            cached_trains = parse_general_timetable(raw)
+        except Exception as exc:
+            print(f"  [ERROR] Failed to fetch general timetable: {exc}")
+            return []
+        print(f"  -> {len(cached_trains)} trains from TDX.")
 
-    print(f"  -> {len(trains)} trains returned from TDX.")
     saved = 0
-    for train in trains:
-        valid_stops = [
-            s for s in train["stops"]
-            if s["tdx_station_id"] in station_map
-        ]
+    for train in cached_trains:
+        valid_stops = [s for s in train["stops"] if s["tdx_station_id"] in station_map]
         if len(valid_stops) < 2:
             continue
-
         db.upsert_train(train["train_no"], train["train_type"])
         schedule_id = db.upsert_schedule(train["train_no"], target_date)
         db.delete_stop_times(schedule_id)
-
         for stop in valid_stops:
             db.insert_stop_time(
                 schedule_id,
@@ -163,7 +167,8 @@ def crawl_general(tdx: TDXClient, db: DBWriter, station_map: dict[str, int], tar
         saved += 1
 
     db.commit()
-    print(f"  -> Saved {saved} schedules (as date {target_date}).")
+    print(f"  -> Saved {saved} schedules for {target_date}.")
+    return cached_trains
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
@@ -189,8 +194,12 @@ def main():
 
         if not args.prices_only:
             if args.general:
-                target = date.fromisoformat(args.date) if args.date else date.today()
-                crawl_general(tdx, db, station_map, target)
+                # Fetch GeneralTimetable ONCE, apply to every requested date
+                start = date.fromisoformat(args.date) if args.date else date.today()
+                cached: list[dict] | None = None
+                for i in range(crawl_days):
+                    target = start + timedelta(days=i)
+                    cached = crawl_general(tdx, db, station_map, target, cached)
             elif args.date:
                 crawl_date(tdx, db, station_map, date.fromisoformat(args.date))
             else:
