@@ -63,11 +63,28 @@ class TDXClient:
         Return full timetable for a specific date.
         train_date format: YYYY-MM-DD
         """
-        return self._get(f"DailyTimetable/TrainDate/{train_date}")
+        import time as _time
+        _time.sleep(1)  # respect TDX rate limit (50 req/min free tier)
+        result = self._get(f"DailyTimetable/TrainDate/{train_date}")
+        # TDX sometimes wraps results under a key
+        if isinstance(result, dict):
+            for key in ("TrainTimetables", "DailyTrainTimetables", "data"):
+                if key in result:
+                    return result[key]
+            return []
+        return result if isinstance(result, list) else []
 
     def get_general_timetable(self) -> list[dict]:
         """Return the general (non-date-specific) timetable."""
-        return self._get("GeneralTimetable")
+        import time as _time
+        _time.sleep(1)
+        result = self._get("GeneralTimetable")
+        if isinstance(result, dict):
+            for key in ("TrainTimetables", "GeneralTrainTimetables", "data"):
+                if key in result:
+                    return result[key]
+            return []
+        return result if isinstance(result, list) else []
 
     def get_od_fares(self) -> list[dict]:
         """Return OD (origin-destination) fare matrix from TDX."""
